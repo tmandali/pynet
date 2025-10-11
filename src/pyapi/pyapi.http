@@ -4,3 +4,54 @@ GET {{pyapi_HostAddress}}/demo
 Accept: application/json
 
 ###
+
+POST {{pyapi_HostAddress}}/run-python
+Content-Type: text/plain
+
+from doviz_kurlari import TCMBKur
+from datetime import date
+
+kur_yoneticisi = TCMBKur()
+euro_kuru = kur_yoneticisi.kur_getir("EUR")
+print(euro_kuru)
+
+gecmis_tarih = date(2024, 5, 15) # Yıl, Ay, Gün
+gecmis_kurlar = TCMBKur(tarih=gecmis_tarih)
+euro_gecmis = gecmis_kurlar.kur_getir("EUR")
+print(euro_gecmis)
+
+
+
+# import json
+
+# class Kedi:
+#     def __init__(self, ad, tur):
+#         self.ad = ad
+#         self.tur = tur
+
+# class Köpek:
+#     def __init__(self, ad, irk):
+#         self.ad = ad
+#         self.irk = irk
+
+# def custom_encoder(obj):
+#     data = obj.__dict__.copy()
+#     data['$type'] = obj.__class__.__name__
+#     return data
+    
+# hayvanlar = [Kedi("Mırnav", "Tekir"), Köpek("Karabaş", "Kangal")]
+
+# json_output = json.dumps(
+#     hayvanlar, 
+#     default=custom_encoder, 
+#     ensure_ascii=False
+# )
+
+# print(json_output)
+
+#print("Hello World!")
+#import sys
+#import pandas as pd
+#print(f"Python version: {sys.version}")
+#print(f"Pandas version: {pd.__version__}")
+
