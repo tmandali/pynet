@@ -16,7 +16,7 @@ Content-Type: application/json
             "dbname": "TestDb"
             }
     },
-    "query": "SELECT * FROM kullanicilar LIMIT 100"
+    "query": "SELECT * FROM kullanicilar LIMIT 1"
 }
 ###
 

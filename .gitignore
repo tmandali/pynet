@@ -2,6 +2,7 @@
 bin/
 obj/
 *.user
+*.DotSettings.user
 *.suo
 *.cache
 *.dll
@@ -12,6 +13,10 @@ obj/
 *.swp
 *.swo
 *~
+
+# Data files
+*.db
+*.parquet
 
 # Visual Studio
 .vs/
@@ -106,6 +111,7 @@ venv.bak/
 .idea/
 *.swp
 *.swo
+*.DotSettings.user
 
 # OS
 .DS_Store
