@@ -11,6 +11,18 @@
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </AdditionalFiles>
     <None Include="..\python\requirements.txt" Link="python\requirements.txt" />
+    <AdditionalFiles Update="..\python\code_exec.py">
+      <Link>python\code_exec.py</Link>
+    </AdditionalFiles>
+    <AdditionalFiles Update="..\python\demo.py">
+      <Link>python\demo.py</Link>
+    </AdditionalFiles>
+    <AdditionalFiles Update="..\python\doviz_kurlari.py">
+      <Link>python\doviz_kurlari.py</Link>
+    </AdditionalFiles>
+    <AdditionalFiles Update="..\python\export_parquet.py">
+      <Link>python\export_parquet.py</Link>
+    </AdditionalFiles>
   </ItemGroup>
 
 

@@ -2,6 +2,9 @@ import logging
 # import psycopg2
 # import psycopg2.extras
 # import os
+import platform
+from turtle import st
+from typing import Any
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -18,3 +21,20 @@ def greetings(name: str) -> str:
 
 # if __name__ == "__main__":
 #     print(greetings("John"))
+
+def return_dict() -> dict[str, int]:
+    return {'a': 1, 'b': 2, 'c': 3}
+
+def get_info() -> dict[str, str]:
+    """Return system information."""
+    import platform
+    return {
+        "system": platform.system(),
+        "version": platform.version(),
+        "machine": platform.machine()
+    }
+
+def get_obj() -> Any:
+    """Return system information."""
+    import platform
+    return {"mesaj": "Ana Sunucu Aktif"} 

@@ -7,6 +7,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{164E2BFA-982
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "pyapi", "src\pyapi\pyapi.csproj", "{070AC277-DCFA-4F75-A729-C2922FDBF532}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "testconsole", "src\testconsole\testconsole.csproj", "{B93FA071-78A2-49DF-B843-838065A1ECC3}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -17,11 +19,16 @@ Global
 		{070AC277-DCFA-4F75-A729-C2922FDBF532}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{070AC277-DCFA-4F75-A729-C2922FDBF532}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{070AC277-DCFA-4F75-A729-C2922FDBF532}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B93FA071-78A2-49DF-B843-838065A1ECC3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B93FA071-78A2-49DF-B843-838065A1ECC3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B93FA071-78A2-49DF-B843-838065A1ECC3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B93FA071-78A2-49DF-B843-838065A1ECC3}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{070AC277-DCFA-4F75-A729-C2922FDBF532} = {164E2BFA-9821-4B52-81FD-201614CA98DD}
+		{B93FA071-78A2-49DF-B843-838065A1ECC3} = {164E2BFA-9821-4B52-81FD-201614CA98DD}
 	EndGlobalSection
 EndGlobal

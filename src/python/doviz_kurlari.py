@@ -1,8 +1,6 @@
-# doviz_kurlari.py (Tarih Desteği Eklenmiş Versiyon)
-
 import requests
 import xml.etree.ElementTree as ET
-from datetime import date  # Tarih işlemleri için datetime kütüphanesinden date'i import ediyoruz
+from datetime import date  
 
 class TCMBKur:
     """
@@ -76,7 +74,6 @@ class TCMBKur:
         return self.kurlar.get(kod)
 
 
-# --- SINIFIN KULLANIM ÖRNEKLERİ ---
 if __name__ == "__main__":
     
     # Örnek 1: Bugüne ait kurları al (eski yöntem)

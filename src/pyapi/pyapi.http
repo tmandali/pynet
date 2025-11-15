@@ -1,26 +1,45 @@
 @pyapi_HostAddress = http://localhost:5172
 
-GET {{pyapi_HostAddress}}/demo
-Accept: application/json
+POST {{pyapi_HostAddress}}/testdb/parquet?filename=users.parquet
+Content-Type: text/plain
+
+SELECT * FROM Users
 
 ###
+POST {{pyapi_HostAddress}}/dataexporter/parquet?filename=users.parquet
+Content-Type: application/json
 
-POST {{pyapi_HostAddress}}/run-python
+{
+    "datasets": {
+        "kullanicilar": {
+            "query": "SELECT * FROM Users", 
+            "dbname": "TestDb"
+            }
+    },
+    "query": "SELECT * FROM kullanicilar LIMIT 100"
+}
+###
+
+GET {{pyapi_HostAddress}}/dict
+Accept: application/json    
+###
+
+POST {{pyapi_HostAddress}}/run
 Content-Type: text/plain
 
 from doviz_kurlari import TCMBKur
 from datetime import date
 
 kur_yoneticisi = TCMBKur()
-euro_kuru = kur_yoneticisi.kur_getir("EUR")
-print(euro_kuru)
+euro_kuru = kur_yoneticisi.kur_getir("USD")
+#print(euro_kuru)
 
-gecmis_tarih = date(2024, 5, 15) # Yıl, Ay, Gün
+gecmis_tarih = date(2024, 5, 15) 
 gecmis_kurlar = TCMBKur(tarih=gecmis_tarih)
 euro_gecmis = gecmis_kurlar.kur_getir("EUR")
-print(euro_gecmis)
+#print(euro_gecmis)
 
-
+date.today()
 
 # import json
 
