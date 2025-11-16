@@ -25,27 +25,6 @@ builder.Services.AddSingleton(sp => sp.GetRequiredService<IPythonEnvironment>().
 
 var app = builder.Build();
 
-static IResult HandleException(Exception ex, int statusCode = 500, string? title = null)
-{
-    var errorDetail = ex.Message;
-    if (ex.InnerException != null)
-    {
-        errorDetail += $" Inner Exception: {ex.InnerException.Message}";
-        if (ex.InnerException.StackTrace != null)
-        {
-            errorDetail += $" StackTrace: {ex.InnerException.StackTrace}";
-        }
-    }
-    if (ex.StackTrace != null)
-    {
-        errorDetail += $" StackTrace: {ex.StackTrace}";
-    }
-    
-    return Results.Problem(
-        detail: errorDetail,
-        statusCode: statusCode,
-        title: title ?? "An error occurred while processing the request");
-}
 
 app.MapGet("/", () => "Hello World!");
 app.MapGet("/demo", (IDemo demo) => demo.Greetings("timur"));
@@ -122,3 +101,25 @@ app.MapPost("/run", async (IPythonEnvironment env, HttpRequest request) =>
 });
 
 await app.RunAsync();
+
+// static IResult HandleException(Exception ex, int statusCode = 500, string? title = null)
+// {
+//     var errorDetail = ex.Message;
+//     if (ex.InnerException != null)
+//     {
+//         errorDetail += $" Inner Exception: {ex.InnerException.Message}";
+//         if (ex.InnerException.StackTrace != null)
+//         {
+//             errorDetail += $" StackTrace: {ex.InnerException.StackTrace}";
+//         }
+//     }
+//     if (ex.StackTrace != null)
+//     {
+//         errorDetail += $" StackTrace: {ex.StackTrace}";
+//     }
+    
+//     return Results.Problem(
+//         detail: errorDetail,
+//         statusCode: statusCode,
+//         title: title ?? "An error occurred while processing the request");
+// }
