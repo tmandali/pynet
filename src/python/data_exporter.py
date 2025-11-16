@@ -24,8 +24,8 @@ def to_parquet_dataset(query: str, dataset: dict[str, pl.DataFrame]) -> Buffer:
 if __name__ == "__main__":
     db_uri = "mssql://sa:Passw@rd@localhost:1433/TestDb?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes"
     query = "SELECT * FROM users"
-    # buffer = to_parquet(db_uri, query)
-    buffer = to_parquet(query, dataset={"users": to_polar(db_uri, query)})
+    buffer = to_parquet(db_uri, query)
+    #buffer = to_parquet_dataset(query, dataset={"users": to_polar(db_uri, query)})
 
     with open("output.parquet", "wb") as f:
         f.write(buffer)
