@@ -55,7 +55,7 @@ app.MapPost("/dataexporter/parquet", (
         dx.ToParquetDataset(request.Query, datasets).AsReadOnlySpan<byte>().ToArray(), "application/octet-stream", filename ?? $"export_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}.parquet");
 });
 
-app.MapPost("/{cnnName}/parquet", async (
+app.MapPost("/dataexporter/{cnnName}/parquet", async (
     IDataExporter dx, 
     IConfiguration config,
     HttpRequest request,
