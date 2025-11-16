@@ -62,10 +62,12 @@ app.MapPost("/{cnnName}/parquet", async (
     string cnnName,
     string? filename = null) =>
 {
+
+    
     using var reader = new StreamReader(request.Body);
     var meta = new {
         Query = await reader.ReadToEndAsync(),
-        DbUri = config.GetConnectionString(cnnName) ?? throw new Exception("Connection string not found"),
+        DbUri = request.Headers.TryGetValue(cnnName, out var headerValue) ? headerValue.ToString() : config.GetConnectionString(cnnName) ?? throw new Exception("Connection string not found"),
         FileName = filename ?? $"export_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}.parquet"
     };
 

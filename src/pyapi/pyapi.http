@@ -1,24 +1,26 @@
 @pyapi_HostAddress = http://localhost:5172
 
-POST {{pyapi_HostAddress}}/testdb/parquet?filename=users.parquet
+POST {{pyapi_HostAddress}}/retail/parquet?filename=magaza.parquet
 Content-Type: text/plain
+retail: mssql://temaoltp:1433/Retail?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=true&trusted_connection=true
 
-SELECT * FROM Users
+SELECT * FROM tb_Depo (nolock) where DepoTip=3
 
 ###
-POST {{pyapi_HostAddress}}/dataexporter/parquet?filename=users.parquet
+POST {{pyapi_HostAddress}}/dataexporter/parquet?filename=magaza.parquet
 Content-Type: application/json
 
 {
     "ConnectionStrings": {
-        "testdb": "mssql://sa:Passw@rd@localhost:1433/TestDb?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes"
+        "testdb": "mssql://sa:Passw@rd@localhost:1433/TestDb?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes",
+        "retail": "mssql://temaoltp:1433/Retail?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=true&trusted_connection=true"
     },
     "DataSources": {
-        "testdb": {
-            "kullanici": "SELECT * FROM Users"
+        "retail": {
+            "magaza": "SELECT * FROM tb_Depo (nolock) where DepoTip=3"
             }
     },
-    "Query": "SELECT * FROM kullanici LIMIT 1" 
+    "Query": "SELECT * FROM magaza LIMIT 100" 
 }
 
 ###
