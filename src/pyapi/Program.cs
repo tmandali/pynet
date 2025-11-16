@@ -25,6 +25,28 @@ builder.Services.AddSingleton(sp => sp.GetRequiredService<IPythonEnvironment>().
 
 var app = builder.Build();
 
+static IResult HandleException(Exception ex, int statusCode = 500, string? title = null)
+{
+    var errorDetail = ex.Message;
+    if (ex.InnerException != null)
+    {
+        errorDetail += $" Inner Exception: {ex.InnerException.Message}";
+        if (ex.InnerException.StackTrace != null)
+        {
+            errorDetail += $" StackTrace: {ex.InnerException.StackTrace}";
+        }
+    }
+    if (ex.StackTrace != null)
+    {
+        errorDetail += $" StackTrace: {ex.StackTrace}";
+    }
+    
+    return Results.Problem(
+        detail: errorDetail,
+        statusCode: statusCode,
+        title: title ?? "An error occurred while processing the request");
+}
+
 app.MapGet("/", () => "Hello World!");
 app.MapGet("/demo", (IDemo demo) => demo.Greetings("timur"));
 app.MapGet("/dict", (IDemo demos) =>
@@ -39,12 +61,16 @@ app.MapPost("/dataexporter/parquet", (
     DataExporterRequest request, 
     string? filename = null) =>
 {
-    var datasets = request.Datasets
-       .Select(s=> new { 
-            TableName = s.Key, 
-            Source = s.Value.Query, 
-            DbUri = string.IsNullOrEmpty(s.Value.DbUri) ? config.GetConnectionString(s.Value.DbName) ?? throw new Exception("Connection string not found") : s.Value.DbUri })
-       .ToDictionary(x => x.TableName, x => dx.ToPolar(x.DbUri, x.Source));
+        var datasets = request.DataSources.SelectMany(s=> 
+        s.Value.Select(v=> new {
+            DbUri = request.ConnectionStrings.TryGetValue(s.Key, out var connStr) && !string.IsNullOrEmpty(connStr) 
+                ? connStr 
+                : config.GetConnectionString(s.Key) ?? throw new Exception($"Connection string not found: {s.Key}"),
+            Name = v.Key,
+            Query = v.Value
+        })
+    )
+    .ToDictionary(x => x.Name, x => dx.ToPolar(x.DbUri, x.Query));
     
     return Results.Bytes(
         dx.ToParquet(request.Query, datasets).AsReadOnlySpan<byte>().ToArray(), "application/octet-stream", filename ?? $"export_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}.parquet");

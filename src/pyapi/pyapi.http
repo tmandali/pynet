@@ -10,14 +10,17 @@ POST {{pyapi_HostAddress}}/dataexporter/parquet?filename=users.parquet
 Content-Type: application/json
 
 {
-    "datasets": {
-        "kullanicilar": {
-            "query": "SELECT * FROM Users", 
-            "dbname": "TestDb"
+    "ConnectionStrings": {
+        "testdb": "mssql://sa:Passw@rd@localhost:1433/TestDb?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes"
+    },
+    "DataSources": {
+        "testdb": {
+            "kullanici": "SELECT * FROM Users"
             }
     },
-    "query": "SELECT * FROM kullanicilar LIMIT 1"
+    "Query": "SELECT * FROM kullanici LIMIT 1" 
 }
+
 ###
 
 GET {{pyapi_HostAddress}}/dict
