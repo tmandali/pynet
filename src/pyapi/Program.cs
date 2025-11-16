@@ -73,7 +73,7 @@ app.MapPost("/dataexporter/parquet", (
     .ToDictionary(x => x.Name, x => dx.ToPolar(x.DbUri, x.Query));
     
     return Results.Bytes(
-        dx.ToParquet(request.Query, datasets).AsReadOnlySpan<byte>().ToArray(), "application/octet-stream", filename ?? $"export_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}.parquet");
+        dx.ToParquetDataset(request.Query, datasets).AsReadOnlySpan<byte>().ToArray(), "application/octet-stream", filename ?? $"export_{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}.parquet");
 });
 
 app.MapPost("/{cnnName}/parquet", async (

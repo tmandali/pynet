@@ -12,7 +12,7 @@ def to_parquet(db_uri: str, query: str) -> Buffer:
         df.write_parquet(out_stream, compression="zstd", use_pyarrow=True, pyarrow_options={"row_group_size": 100_000})
         return out_stream.getvalue()
 
-def to_parquet(query: str, dataset: dict[str, pl.DataFrame]) -> Buffer:   
+def to_parquet_dataset(query: str, dataset: dict[str, pl.DataFrame]) -> Buffer:   
     ctx = pl.SQLContext()
     for name, df in dataset.items():
         ctx.register(name, df)
