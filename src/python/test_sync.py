@@ -1,4 +1,5 @@
 from typing import Any, Dict, Iterable, Iterator
+import os
 import duckdb
 from pyarrow.ipc import read_record_batch
 from sync import Sync
@@ -12,31 +13,50 @@ conn_str = "mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustSe
 tarih_kolonu = "Tarih" 
 query = f"SELECT top 1000000 *, YEAR({tarih_kolonu}) as Yil FROM tb_UrunRecete"
 
-def read_batches(reader: pa.ipc.RecordBatchStreamReader) -> Iterator[Dict[str, Any]]:                    # Read batches and yield records
-    for batch in reader:       
-        table = pa.table([batch[i] for i in range(batch.num_columns)], 
-                    names=batch.schema.names)
-    
+def read_batches_arrow(reader: pa.ipc.RecordBatchStreamReader) -> Iterator[pa.Table]:     
+    for batch in reader:
+        yield pa.Table.from_batches([batch])
+
+    #  for batch in reader:       
+    #     table = pa.table([batch[i] for i in range(batch.num_columns)], 
+    #                 names=batch.schema.names)
+
+def read_batches_dict(reader: pa.ipc.RecordBatchStreamReader) -> Iterator[Dict[str, Any]]:                    # Read batches and yield records
+    for table in read_batches_arrow(reader):       
+        for row in table.to_pylist():
+            yield row
+
     # Convert to Python objects with type preservation
-    for row_idx in range(table.num_rows):
-        record = {}
-        for col_idx, column_name in enumerate(table.column_names):
-            column = table.column(col_idx)
-            value = column[row_idx].as_py()  # Converts to native Python type
-            record[column_name] = value
+    # for row_idx in range(table.num_rows):
+    #     record = {}
+    #     for col_idx, column_name in enumerate(table.column_names):
+    #         column = table.column(col_idx)
+    #         value = column[row_idx].as_py()  # Converts to native Python type
+    #         record[column_name] = value
         
-        yield record
+    #     yield record
+
 
 reader: pa.ipc.RecordBatchStreamReader = cx.read_sql(conn_str, query, return_type="arrow_stream", batch_size=100000)
 
-ds.write_dataset(
-    reader, 
-    base_dir="dataset_output", 
-    format="parquet", 
-    partitioning=["Yil"], 
-    schema=reader.schema,
-    existing_data_behavior="overwrite_or_ignore"
-)
+# ds.write_dataset(
+#     reader, 
+#     base_dir="dataset_output", 
+#     format="parquet", 
+#     partitioning=["Yil"], 
+#     schema=reader.schema,
+#     existing_data_behavior="overwrite_or_ignore"
+# )
+
+os.makedirs("batch_output", exist_ok=True)
+
+for i, batch in enumerate(reader):
+    table = pa.Table.from_batches([batch])
+    output_file = f"batch_output/batch_{i}.parquet"
+    pq.write_table(table, output_file)
+    print(f"Batch {i} yazıldı: {output_file} ({batch.num_rows} satır)")
+
+pq.write_table(reader.read_all(), "dataset_output/arrow_output.parquet", compression="zstd")
 
 
 # Reader 'write_dataset' tarafından tüketildiği için aşağıdaki kısım çalışmayacaktır (stream bitmiştir).
