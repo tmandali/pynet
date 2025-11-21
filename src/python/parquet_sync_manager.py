@@ -242,8 +242,9 @@ if __name__ == "__main__":
     
     # 1. Bağlantı Ayarları
     # Lütfen kendi sunucu bilgilerinizi girin:
-    CONN_STR = "mssql://SA:Sifre123@localhost/TestDB?driver=ODBC+Driver+17+for+SQL+Server"
-    
+    # Active Directory ile
+    CONN_STR = "mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
+
     manager = ParquetSynchronizer(
         db_uri=CONN_STR, 
         out_dir="veri_ambari",  # Parquetlerin duracağı klasör
@@ -251,19 +252,18 @@ if __name__ == "__main__":
     )
 
     # --- A. İLK YÜKLEME (Sadece 1 kere çalıştırın) ---
-    # manager.init(
-    #     table="Satislar",
-    #     pk="SatisId",
-    #     cols=["SatisId", "UrunAdi", "Tutar", "RowVersion"]
-    # )
+    manager.init(
+       table="tb_UrunRecete",
+        pk="ID"
+    )
 
     # --- B. ARTIMLI GÜNCELLEME (Cron/Schedule ile çalıştırın) ---
-    manager.sync(
-        table="Satislar",
-        pk="SatisId",
-        ver="RowVersion",
-        cols=["SatisId", "UrunAdi", "Tutar", "RowVersion"]
-    )
+    #manager.sync(
+    #    table="tb_UrunRecete",
+    #    pk="SatisId",
+    #    ver="RowVersion",
+    #    cols=["SatisId", "UrunAdi", "Tutar", "RowVersion"]
+    #)
 
     # --- C. DATETIME ILE ARTIMLI GÜNCELLEME ÖRNEĞİ ---
     # manager.sync(
