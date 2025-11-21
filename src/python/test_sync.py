@@ -9,9 +9,7 @@ import pyarrow.parquet as pq
 import pyarrow.dataset as ds
 
 conn_str = "mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
-# Tarih kolonunuzun adını buraya yazın (Örn: Tarih, OlusturmaTarihi vb.)
-tarih_kolonu = "Tarih" 
-query = f"SELECT top 1000000 *, YEAR({tarih_kolonu}) as Yil FROM tb_UrunRecete"
+query = f"SELECT top 1000000 *, YEAR(SonDuzenleme) as Yil, ID / 100000 as Chunk FROM tb_UrunRecete (nolock)"
 
 def read_batches_arrow(reader: pa.ipc.RecordBatchStreamReader) -> Iterator[pa.Table]:     
     for batch in reader:
@@ -39,24 +37,19 @@ def read_batches_dict(reader: pa.ipc.RecordBatchStreamReader) -> Iterator[Dict[s
 
 reader: pa.ipc.RecordBatchStreamReader = cx.read_sql(conn_str, query, return_type="arrow_stream", batch_size=100000)
 
-# ds.write_dataset(
-#     reader, 
-#     base_dir="dataset_output", 
-#     format="parquet", 
-#     partitioning=["Yil"], 
-#     schema=reader.schema,
-#     existing_data_behavior="overwrite_or_ignore"
-# )
+ds.write_dataset(
+    reader, 
+    base_dir="dataset_output", 
+    format="parquet", 
+    partitioning=["Chunk"]
+)
 
-os.makedirs("batch_output", exist_ok=True)
-
-for i, batch in enumerate(reader):
-    table = pa.Table.from_batches([batch])
-    output_file = f"batch_output/batch_{i}.parquet"
-    pq.write_table(table, output_file)
-    print(f"Batch {i} yazıldı: {output_file} ({batch.num_rows} satır)")
-
-pq.write_table(reader.read_all(), "dataset_output/arrow_output.parquet", compression="zstd")
+# os.makedirs("batch_output", exist_ok=True)
+# for i, batch in enumerate(reader):
+#     table = pa.Table.from_batches([batch])
+#     output_file = f"batch_output/batch_{i}.parquet"
+#     pq.write_table(table, output_file)
+#     print(f"Batch {i} yazıldı: {output_file} ({batch.num_rows} satır)")
 
 
 # Reader 'write_dataset' tarafından tüketildiği için aşağıdaki kısım çalışmayacaktır (stream bitmiştir).
