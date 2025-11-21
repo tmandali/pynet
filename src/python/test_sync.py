@@ -9,7 +9,11 @@ import pyarrow.parquet as pq
 import pyarrow.dataset as ds
 
 conn_str = "mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
-query = f"SELECT top 1000000 *, YEAR(SonDuzenleme) as Yil, ID / 100000 as Chunk FROM tb_UrunRecete (nolock)"
+query = """
+   SELECT *, ID / 1000000 as Chunk 
+   FROM tb_UrunRecete (nolock) 
+   order by ID
+   """
 
 def read_batches_arrow(reader: pa.ipc.RecordBatchStreamReader) -> Iterator[pa.Table]:     
     for batch in reader:
