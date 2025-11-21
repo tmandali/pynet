@@ -5,9 +5,12 @@ from sync import Sync
 import connectorx as cx
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pyarrow.dataset as ds
 
 conn_str = "mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
-query = "SELECT top 1000000 * FROM tb_UrunRecete"
+# Tarih kolonunuzun adını buraya yazın (Örn: Tarih, OlusturmaTarihi vb.)
+tarih_kolonu = "Tarih" 
+query = f"SELECT top 1000000 *, YEAR({tarih_kolonu}) as Yil FROM tb_UrunRecete"
 
 def read_batches(reader: pa.ipc.RecordBatchStreamReader) -> Iterator[Dict[str, Any]]:                    # Read batches and yield records
     for batch in reader:       
@@ -26,16 +29,28 @@ def read_batches(reader: pa.ipc.RecordBatchStreamReader) -> Iterator[Dict[str, A
 
 reader: pa.ipc.RecordBatchStreamReader = cx.read_sql(conn_str, query, return_type="arrow_stream", batch_size=100000)
 
-with pa.OSFile('bigfile.arrow', 'wb') as sink:
-   with pa.ipc.new_file(sink, reader.schema) as writer:
-      for batch in reader:
-        writer.write(batch)
+ds.write_dataset(
+    reader, 
+    base_dir="dataset_output", 
+    format="parquet", 
+    partitioning=["Yil"], 
+    schema=reader.schema,
+    existing_data_behavior="overwrite_or_ignore"
+)
 
-with pa.OSFile('bigfile.arrow', 'rb') as source:
-   loaded_array = pa.ipc.open_file(source).read_all()
 
-print("LEN:", len(loaded_array))
-print("RSS: {}MB".format(pa.total_allocated_bytes() >> 20))
+# Reader 'write_dataset' tarafından tüketildiği için aşağıdaki kısım çalışmayacaktır (stream bitmiştir).
+# Eğer hem parquet hem arrow dosyası istiyorsanız, sorguyu iki kere çalıştırmanız gerekir.
+# with pa.OSFile('bigfile.arrow', 'wb') as sink:
+#    with pa.ipc.new_file(sink, reader.schema) as writer:
+#       for batch in reader:
+#         writer.write(batch)
+
+#with pa.OSFile('bigfile.arrow', 'rb') as source:
+#   loaded_array = pa.ipc.open_file(source).read_all()
+
+#print("LEN:", len(loaded_array))
+#print("RSS: {}MB".format(pa.total_allocated_bytes() >> 20))
 
 #for batch in reader:
 #    # Process each batch separately to manage memory
