@@ -1,60 +1,61 @@
 import logging
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 import polars as pl
 
-class DeltaParquetManager:
-    def __init__(self): 
-        self.logger = logging.getLogger(self.__class__.__name__)
-        if not self.logger.handlers:
-            # Console Handler
-            console_handler = logging.StreamHandler()
-            formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-            console_handler.setFormatter(formatter)
-            self.logger.addHandler(console_handler)
+# class DeltaParquetManager:
+#     def __init__(self): 
+#         self.logger = logging.getLogger(self.__class__.__name__)
+#         if not self.logger.handlers:
+#             # Console Handler
+#             console_handler = logging.StreamHandler()
+#             formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+#             console_handler.setFormatter(formatter)
+#             self.logger.addHandler(console_handler)
 
-    def _read_database_part(self, database_type:str, db_uri:str, query:str, order_by_column:str, last_id:Any, limit:int, partition:int) -> pl.DataFrame:      
+def _read_database_mssql(db_uri:str, query:str, order_by_column:str, last_id:Any, limit:int, partition:int) -> pl.DataFrame:      
+    range_query = f"""           
+        WITH Part AS (SELECT TOP {limit} {order_by_column} FROM ({query}) source WHERE {order_by_column} > '{last_id}' ORDER BY 1),
+        Range AS (SELECT NTILE({partition}) OVER (ORDER BY {order_by_column}) as Part, {order_by_column} FROM Part)
+        SELECT Part, MIN({order_by_column}) as BeginPart, MAX({order_by_column}) as EndPart FROM Range GROUP BY Part
+    """
 
-        if database_type.lower() != "mssql":
-            raise ValueError(f"Database type {database_type} is not supported")
+    range = pl.read_database_uri(range_query, db_uri).to_dicts()
+    if range is None or len(range) == 0:
+        return None
 
-        range_query = f"""           
-            WITH Part AS (SELECT TOP {limit} {order_by_column} FROM ({query}) source WHERE {order_by_column} > '{last_id}' ORDER BY 1),
-            Range AS (SELECT NTILE({partition}) OVER (ORDER BY {order_by_column}) as Part, {order_by_column} FROM Part)
-            SELECT Part, MIN({order_by_column}) as BeginPart, MAX({order_by_column}) as EndPart FROM Range GROUP BY Part
-        """
+    part_list: list[str] = [f"""
+        SELECT * FROM ({query}) part WHERE {order_by_column} BETWEEN '{range["BeginPart"]}' AND '{range["EndPart"]}'
+        """ for range in range]
 
-        range = pl.read_database_uri(range_query, db_uri).to_dicts()
-        if range is None or len(range) == 0:
-            return None
+    df = pl.read_database_uri(part_list, db_uri)
+    if df.is_empty():
+        return None
 
-        part_list: list[str] = [f"""
-            SELECT * FROM ({query}) part WHERE {order_by_column} BETWEEN '{range["BeginPart"]}' AND '{range["EndPart"]}'
-            """ for range in range]
+    return df                
 
-        df = pl.read_database_uri(part_list, db_uri)
-        if df.is_empty():
-            return None
-
-        return df                
+def read_database_part(db_uri:str, query:str, order_by_column:str, last_id:Any = 0, limit:int=1_000_000, partition:int=8):     
+    if partition <= 0 or partition is None:
+        partition = 1
     
-    def read_database_part(self, db_uri:str, query:str, order_by_column:str, last_id:Any = 0, limit:int=1_000_000, partition:int=8):     
-        if partition <= 0 or partition is None:
-            partition = 1
-        
-        parsed_db_uri = urlparse(db_uri)
+    parsed_db_uri = urlparse(db_uri)
+    if parsed_db_uri.scheme.lower() == "mssql":
+        read_database_func = _read_database_mssql
+    else:
+        raise ValueError(f"Database type {parsed_db_uri.scheme} is not supported")
 
-        while True:
-            df = self._read_database_part(parsed_db_uri.scheme, db_uri, query, order_by_column, last_id, limit, partition)
-            if df is None:
-                break
+    while True:
+        df = read_database_func(db_uri, query, order_by_column, last_id, limit, partition)
 
-            last_id = df[order_by_column].max()
-            yield df
+        if df is None:
+            break
+
+        last_id = df[order_by_column].max()
+        yield df
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    db_reader = DeltaParquetManager().read_database_part(
+    db_reader = read_database_part(
         db_uri="mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true", 
         query="SELECT * FROM tb_UrunRecete", 
         order_by_column="ID")
