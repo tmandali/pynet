@@ -3,15 +3,12 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 import polars as pl
 
-# class DeltaParquetManager:
-#     def __init__(self): 
-#         self.logger = logging.getLogger(self.__class__.__name__)
-#         if not self.logger.handlers:
-#             # Console Handler
-#             console_handler = logging.StreamHandler()
-#             formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-#             console_handler.setFormatter(formatter)
-#             self.logger.addHandler(console_handler)
+logger = logging.getLogger(__name__)
+if not logger.handlers:
+    console_handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
 
 def _read_database_mssql(db_uri:str, query:str, order_by_column:str, last_id:Any, limit:int, partition:int) -> pl.DataFrame:      
     range_query = f"""           
@@ -55,16 +52,35 @@ def read_database_part(db_uri:str, query:str, order_by_column:str, last_id:Any =
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    db_reader = read_database_part(
-        db_uri="mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true", 
-        query="SELECT * FROM tb_UrunRecete", 
-        order_by_column="ID")
 
-    for df in db_reader:
-        # df = df.with_columns(
-        #     pl.col("RowVersion").map_elements(
-        #         lambda x: x.hex() if isinstance(x, bytes) else x,
-        #         return_dtype=pl.Utf8
-        #     ).alias("RowVersion")
-        # )
-        print(df.height)
+    db_uri = "mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
+    delta_table = "./data/urunrecete"
+
+    initial_reader = read_database_part(db_uri, "SELECT * FROM tb_UrunRecete", "ID")
+    for df in initial_reader:
+        df = df.with_columns(
+            pl.col("RowVersion").bin.encode("hex"),
+            pl.lit(0, pl.Int64).alias("Hist_ID"),
+            pl.lit(0, pl.Int16).alias("Hist_Islem")
+        ).write_delta(
+            target=delta_table, 
+            mode="append")
+        logger.info(f"Initial table height: {df.height}")
+
+    delta_reader = read_database_part(db_uri, "SELECT * FROM tb_UrunRecete_Hist", "Hist_ID")
+    for df in delta_reader:
+        df = df.with_columns(
+            pl.col("RowVersion").bin.encode("hex"),
+        ).filter(
+            pl.col("Hist_ID") == pl.col("Hist_ID").max().over("ID")
+        ).write_delta(
+            target=delta_table, 
+            mode="merge",
+            delta_merge_options={
+                "predicate": "s.ID = t.ID",  
+                "source_alias": "s",         
+                "target_alias": "t",   
+            }
+        ).when_matched_update_all().when_not_matched_insert_all().execute()
+        
+        logger.info(f"Delta table height: {df.height}")
