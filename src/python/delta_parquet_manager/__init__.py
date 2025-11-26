@@ -42,11 +42,10 @@ class DeltaParquetManager:
 
         return df                
     
-    def read_database_part(self, db_uri:str, out_dir:str, query:str, order_by_column:str, limit:int=1_000_000, partition:int=8):     
+    def read_database_part(self, db_uri:str, query:str, order_by_column:str, last_id:int = 0, limit:int=1_000_000, partition:int=8):     
         if partition <= 0 or partition is None:
             partition = 1
         
-        last_id = 0
         while True:
             df = self._read_data_part(last_id, db_uri, query, order_by_column, limit, partition)
             if df is None:
@@ -59,9 +58,8 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     db_reader = DeltaParquetManager().read_database_part(
         db_uri="mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true", 
-        out_dir="urunrecete", 
         query="SELECT * FROM tb_UrunRecete", 
         order_by_column="ID")
 
     for df in db_reader:
-        print(df.describe())
+        print(df.height)
