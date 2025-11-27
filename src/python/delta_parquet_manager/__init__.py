@@ -71,30 +71,34 @@ if __name__ == "__main__":
     db_uri = "mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
     delta_table = "./data/urunrecete"
   
-    initial_reader = read_database_part(db_uri, "SELECT * FROM tb_UrunRecete", "ID", reinit=True)
+    initial_reader = read_database_part(db_uri, "SELECT * FROM tb_UrunRecete", "ID")
     for df in initial_reader:
-        df.with_columns(
+        df = df.with_columns(
             pl.col("RowVersion").bin.encode("hex"),
             pl.lit(0, pl.Int64).alias("Hist_ID"),
             pl.lit(0, pl.Int16).alias("Hist_Islem")
-        ).write_delta(
+        )
+
+        logger.info(f"Initial table height: {df.height}")
+        df.write_delta(
             target=delta_table, 
             mode="append")
 
-    # delta_reader = read_database_part(db_uri, "SELECT * FROM tb_UrunRecete_Hist", "Hist_ID")
-    # for df in delta_reader:
-    #     df = df.with_columns(
-    #         pl.col("RowVersion").bin.encode("hex"),
-    #     ).filter(
-    #         pl.col("Hist_ID") == pl.col("Hist_ID").max().over("ID")
-    #     ).write_delta(
-    #         target=delta_table, 
-    #         mode="merge",
-    #         delta_merge_options={
-    #             "predicate": "s.ID = t.ID",  
-    #             "source_alias": "s",         
-    #             "target_alias": "t",   
-    #         }
-    #     ).when_matched_update_all().when_not_matched_insert_all().execute()
-        
-    #     logger.info(f"Delta table height: {df.height}")
+    logger.info("Initial table written")
+
+    delta_reader = read_database_part(db_uri, "SELECT * FROM tb_UrunRecete_Hist", "Hist_ID")
+    for df in delta_reader:
+        df = df.filter(
+                pl.col("Hist_ID") == pl.col("Hist_ID").max().over("ID"))
+ 
+        logger.info(f"Delta table height: {df.height}")
+        df.write_delta(
+            target=delta_table, 
+            mode="merge",
+            delta_merge_options={
+                "predicate": "s.ID = t.ID",  
+                "source_alias": "s",         
+                "target_alias": "t",   
+            })
+            
+    logger.info("Delta table written")
