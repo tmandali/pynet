@@ -58,48 +58,63 @@ def read_database_part(db_uri:str, query:str, order_by_column:str, last_id:Any=N
         last_id = df[order_by_column].max()
         yield df
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
-    db_uri = "mssql://testoltp/Retail?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
-    delta_table = "./data/urunrecete"
-    last_id = None    
-
-    if os.path.exists(delta_table):
-       last_id = pl.read_delta(delta_table)['ID'].max()
+def write_delta(delta_table:str, db_uri:str, query:str, order_by_column:str, reinit:bool=False, limit:int=1_000_000, partition:int=8) -> pl.DataFrame:
+    if os.path.exists(delta_table) and reinit:
+        shutil.move(delta_table, delta_table + "_" + datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
   
-    initial_reader = read_database_part(db_uri, 
-        "SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID=0, Hist_Islem=0 FROM tb_UrunRecete", "ID", last_id)
+    last_id = None
+    if os.path.exists(delta_table):
+       last_id = pl.read_delta(delta_table)[order_by_column].max()
     
-    for df in initial_reader:
-        # df = df.with_columns(
-        #     pl.col("RowVersion").bin.encode("hex"),
-        #     pl.lit(0, pl.Int64).alias("Hist_ID"),
-        #     pl.lit(0, pl.Int16).alias("Hist_Islem")
-        # )
-
-        logger.info(f"Initial table height: {df.height}")
+    reader = read_database_part(db_uri, query, order_by_column, last_id, limit, partition)
+    for df in reader:
+        logger.info(f"Writing delta table: {delta_table} with height: {df.height}")
         df.write_delta(
             target=delta_table, 
             mode="append")
 
-    logger.info("Initial table written")
+def write_delta_merge(delta_table:str, db_uri:str, query:str,  order_by_column:str, key_column:str = None, limit:int=1_000_000, partition:int=8) -> pl.DataFrame:
+    last_id = None
+    if os.path.exists(delta_table):
+       last_id = pl.read_delta(delta_table)[order_by_column].max()
 
-    delta_reader = read_database_part(db_uri, 
-        "SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID, Hist_Islem FROM tb_UrunRecete_Hist", "Hist_ID")
-    
-    for df in delta_reader:
+    key_column = key_column or order_by_column
+
+    reader = read_database_part(db_uri, query, order_by_column, last_id, limit, partition)
+    for df in reader:
         df = df.filter(
-                pl.col("Hist_ID") == pl.col("Hist_ID").max().over("ID"))
+            pl.col(order_by_column) == pl.col(order_by_column).max().over(key_column))
  
-        logger.info(f"Delta table height: {df.height}")
+        logger.info(f"Writing delta table merge: {delta_table} with height: {df.height}")
         df.write_delta(
             target=delta_table, 
             mode="merge",
             delta_merge_options={
-                "predicate": "s.ID = t.ID",  
+                "predicate": f"s.{key_column} = t.{key_column}",  
                 "source_alias": "s",         
                 "target_alias": "t",   
             }).when_matched_update_all().when_not_matched_insert_all().execute()
 
-    logger.info("Delta table written")
+if __name__ == "__main__":
+    logger.setLevel(logging.INFO) 
+
+    db_uri = "mssql://testoltp/Retail?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
+    delta_table = "./data/urunrecete"
+    
+    write_delta(
+        delta_table, 
+        db_uri, 
+        """SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID=0, Hist_Islem=0 
+           FROM tb_UrunRecete""", 
+        "ID")
+    logger.info(f"Delta table write completed")
+    
+    write_delta_merge(
+        delta_table, 
+        db_uri, 
+        """SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID, Hist_Islem 
+           FROM tb_UrunRecete_Hist""", 
+        "Hist_ID", 
+        "ID")
+    logger.info(f"Delta table merge completed")
+    
