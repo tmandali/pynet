@@ -68,16 +68,18 @@ def read_database_part(db_uri:str, query:str, order_by_column:str, reinit=False,
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
-    db_uri = "mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
+    db_uri = "mssql://testoltp/Retail?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
     delta_table = "./data/urunrecete"
   
-    initial_reader = read_database_part(db_uri, "SELECT * FROM tb_UrunRecete", "ID")
+    initial_reader = read_database_part(db_uri, 
+        "SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID=0, Hist_Islem=0 FROM tb_UrunRecete", "ID")
+    
     for df in initial_reader:
-        df = df.with_columns(
-            pl.col("RowVersion").bin.encode("hex"),
-            pl.lit(0, pl.Int64).alias("Hist_ID"),
-            pl.lit(0, pl.Int16).alias("Hist_Islem")
-        )
+        # df = df.with_columns(
+        #     pl.col("RowVersion").bin.encode("hex"),
+        #     pl.lit(0, pl.Int64).alias("Hist_ID"),
+        #     pl.lit(0, pl.Int16).alias("Hist_Islem")
+        # )
 
         logger.info(f"Initial table height: {df.height}")
         df.write_delta(
@@ -86,7 +88,9 @@ if __name__ == "__main__":
 
     logger.info("Initial table written")
 
-    delta_reader = read_database_part(db_uri, "SELECT * FROM tb_UrunRecete_Hist", "Hist_ID")
+    delta_reader = read_database_part(db_uri, 
+        "SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID, Hist_Islem FROM tb_UrunRecete_Hist", "Hist_ID")
+    
     for df in delta_reader:
         df = df.filter(
                 pl.col("Hist_ID") == pl.col("Hist_ID").max().over("ID"))
@@ -100,5 +104,5 @@ if __name__ == "__main__":
                 "source_alias": "s",         
                 "target_alias": "t",   
             })
-            
+
     logger.info("Delta table written")
