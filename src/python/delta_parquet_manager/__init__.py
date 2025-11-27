@@ -39,16 +39,9 @@ def _read_database_mssql(db_uri:str, query:str, order_by_column:str, last_id:Any
 
     return df                
 
-def read_database_part(db_uri:str, query:str, order_by_column:str, reinit=False, limit:int=1_000_000, partition:int=8):     
+def read_database_part(db_uri:str, query:str, order_by_column:str, last_id:Any=None, limit:int=1_000_000, partition:int=8):     
     if partition <= 0 or partition is None:
         partition = 1
-    
-    last_id = None    
-    if os.path.exists(delta_table):
-        if reinit:
-            shutil.move(delta_table, delta_table + "_" + datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
-        else:
-            last_id = pl.read_delta(delta_table)[order_by_column].max()
 
     parsed_db_uri = urlparse(db_uri)
     if parsed_db_uri.scheme.lower() == "mssql":
@@ -70,9 +63,13 @@ if __name__ == "__main__":
 
     db_uri = "mssql://testoltp/Retail?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
     delta_table = "./data/urunrecete"
+    last_id = None    
+
+    if os.path.exists(delta_table):
+       last_id = pl.read_delta(delta_table)['ID'].max()
   
     initial_reader = read_database_part(db_uri, 
-        "SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID=0, Hist_Islem=0 FROM tb_UrunRecete", "ID")
+        "SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID=0, Hist_Islem=0 FROM tb_UrunRecete", "ID", last_id)
     
     for df in initial_reader:
         # df = df.with_columns(
@@ -103,6 +100,6 @@ if __name__ == "__main__":
                 "predicate": "s.ID = t.ID",  
                 "source_alias": "s",         
                 "target_alias": "t",   
-            })
+            }).when_matched_update_all().when_not_matched_insert_all().execute()
 
     logger.info("Delta table written")
