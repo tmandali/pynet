@@ -2,7 +2,7 @@ import datetime
 import logging
 import os
 import shutil
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import urlparse
 import polars as pl
 
@@ -104,7 +104,7 @@ if __name__ == "__main__":
     write_delta(
         delta_table, 
         db_uri, 
-        """SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID=0, Hist_Islem=0 
+        """SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID=0, Hist_Islem=1 
            FROM tb_UrunRecete""", 
         "ID")
     logger.info(f"Delta table write completed")
