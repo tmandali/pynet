@@ -58,9 +58,7 @@ def read_database_part(db_uri:str, query:str, order_by_column:str, last_id:Any=N
         last_id = df[order_by_column].max()
         yield df
 
-def write_delta(delta_table:str, db_uri:str, query:str, order_by_column:str, reinit:bool=False, limit:int=1_000_000, partition:int=8) -> pl.DataFrame:
-    if os.path.exists(delta_table) and reinit:
-        shutil.move(delta_table, delta_table + "_" + datetime.datetime.now().strftime("%Y%m%d%H%M%S"))
+def write_delta(delta_table:str, db_uri:str, query:str, order_by_column:str, limit:int=1_000_000, partition:int=8) -> pl.DataFrame:
   
     last_id = None
     if os.path.exists(delta_table):
