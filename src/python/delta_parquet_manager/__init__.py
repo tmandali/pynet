@@ -73,6 +73,8 @@ def write_delta(delta_table:str, db_uri:str, query:str, order_by_column:str, rei
             target=delta_table, 
             mode="append")
 
+    logger.info(f"Delta table write completed")
+
 def write_delta_merge(delta_table:str, db_uri:str, query:str,  order_by_column:str, key_column:str = None, limit:int=1_000_000, partition:int=8) -> pl.DataFrame:
     last_id = None
     if os.path.exists(delta_table):
@@ -95,26 +97,31 @@ def write_delta_merge(delta_table:str, db_uri:str, query:str,  order_by_column:s
                 "target_alias": "t",   
             }).when_matched_update_all().when_not_matched_insert_all().execute()
 
+    logger.info(f"Delta table merge completed")
+
 if __name__ == "__main__":
     logger.setLevel(logging.INFO) 
 
     db_uri = "mssql://testoltp/Retail?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
-    delta_table = "./data/urunrecete"
+    delta_table = "./data/urun_recete"
     
+    initial_history_id = pl.read_database_uri("SELECT max(Hist_ID) as initial_history_id FROM tb_UrunRecete_Hist", db_uri)["initial_history_id"].item()
+    if os.path.exists(delta_table):
+       initial_history_id = pl.read_delta(delta_table)["Hist_ID"].max()
+
+    logger.info(f"Initial history id: {initial_history_id}")
+
     write_delta(
         delta_table, 
         db_uri, 
-        """SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID=0, Hist_Islem=1 
+        f"""SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID={initial_history_id}, Hist_Islem=1 
            FROM tb_UrunRecete""", 
         "ID")
-    logger.info(f"Delta table write completed")
-    
+
     write_delta_merge(
         delta_table, 
         db_uri, 
-        """SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID, Hist_Islem 
-           FROM tb_UrunRecete_Hist""", 
+        f"""SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID, Hist_Islem 
+           FROM tb_UrunRecete_Hist WHERE Hist_ID > {initial_history_id}""", 
         "Hist_ID", 
         "ID")
-    logger.info(f"Delta table merge completed")
-    
