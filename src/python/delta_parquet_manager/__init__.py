@@ -5,6 +5,9 @@ import shutil
 from typing import Any
 from urllib.parse import urlparse
 import polars as pl
+from pypika import MSSQLQuery, Order, Table
+from pypika.analytics import Max, Min
+from pypika.queries import QueryBuilder
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -12,6 +15,28 @@ if not logger.handlers:
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
+
+
+def read_database_partition(db_uri:str, table_name:str, partition_on:str, columns:str|list[str]='*', limit:int = 100_000, partition_num:int = 8) -> pl.DataFrame:
+
+    table = Table(table_name)
+    table_query = MSSQLQuery.from_(table).select(table[partition_on]).orderby(table[partition_on], order=Order.asc).limit(limit)
+
+    range_query = MSSQLQuery.from_(table_query).select(
+        Max(table_query[partition_on]).as_('max_id'), 
+        Min(table_query[partition_on]).as_('min_id'))
+        
+    range_sql = range_query.get_sql()
+    range_df = pl.read_database_uri(range_sql, db_uri)
+   
+    min_id = range_df["min_id"].item()
+    max_id = range_df["max_id"].item()
+
+    part_query = MSSQLQuery.from_(table).select(*(columns if isinstance(columns, str) else columns)).where(table[partition_on] >= min_id).where(table[partition_on] <= max_id)
+    part_sql = part_query.get_sql()
+    part_df = pl.read_database_uri(part_sql, db_uri, partition_num=partition_num, partition_on=partition_on)
+
+    return part_df
 
 def _read_database_mssql(db_uri:str, query:str, order_by_column:str, last_id:Any, limit:int, partition:int) -> pl.DataFrame:   
 
@@ -102,6 +127,9 @@ if __name__ == "__main__":
 
     db_uri = "mssql://testoltp/Retail?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
     delta_table = "./data/urun_recete"
+
+    read_database_partition(db_uri, "tb_UrunRecete", "ID" )
+    read_database_partition(db_uri, "tb_UrunRecete", "ID", ["ID", "UrunID1", "UrunID2", "Miktar", "SonDuzenleme", "VarsayilanAsorti"])
     
     initial_history_id = pl.read_database_uri("SELECT max(Hist_ID) as initial_history_id FROM tb_UrunRecete_Hist", db_uri)["initial_history_id"].item()
     if os.path.exists(delta_table):
