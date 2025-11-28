@@ -2,7 +2,7 @@ import datetime
 import logging
 import os
 import shutil
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import urlparse
 import polars as pl
 from pypika import MSSQLQuery, Order, Table
@@ -17,26 +17,34 @@ if not logger.handlers:
     logger.addHandler(console_handler)
 
 
-def read_database_partition(db_uri:str, table_name:str, partition_on:str, columns:str|list[str]='*', limit:int = 100_000, partition_num:int = 8) -> pl.DataFrame:
+def read_database_partition(db_uri:str, table_name:str, partition_on:str, columns:str|list[str]='*', last_value:Any=None, limit:int = 100_000, partition_num:int = 8) -> Iterable[tuple[Any, pl.DataFrame]]:
 
     table = Table(table_name)
     table_query = MSSQLQuery.from_(table).select(table[partition_on]).orderby(table[partition_on], order=Order.asc).limit(limit)
 
-    range_query = MSSQLQuery.from_(table_query).select(
-        Max(table_query[partition_on]).as_('max_id'), 
-        Min(table_query[partition_on]).as_('min_id'))
-        
-    range_sql = range_query.get_sql()
-    range_df = pl.read_database_uri(range_sql, db_uri)
-   
-    min_id = range_df["min_id"].item()
-    max_id = range_df["max_id"].item()
+    while True:
+        if last_value is not None:
+            table_query = table_query.where(table[partition_on] > last_value)
 
-    part_query = MSSQLQuery.from_(table).select(*(columns if isinstance(columns, str) else columns)).where(table[partition_on] >= min_id).where(table[partition_on] <= max_id)
-    part_sql = part_query.get_sql()
-    part_df = pl.read_database_uri(part_sql, db_uri, partition_num=partition_num, partition_on=partition_on)
+        range_query = MSSQLQuery.from_(table_query).select(
+            Max(table_query[partition_on]).as_('max_value'), 
+            Min(table_query[partition_on]).as_('min_value'))
+            
+        range_sql = range_query.get_sql()
+        range_df = pl.read_database_uri(range_sql, db_uri)
+    
+        min_value = range_df["min_value"].item()
+        max_value = range_df["max_value"].item()
 
-    return part_df
+        part_query = MSSQLQuery.from_(table).select(*(columns if isinstance(columns, str) else columns)).where(table[partition_on] >= min_value).where(table[partition_on] <= max_value)
+        part_sql = part_query.get_sql()
+        part_df = pl.read_database_uri(part_sql, db_uri, partition_num=partition_num, partition_on=partition_on)
+
+        if part_df is None or part_df.is_empty():
+            break
+
+        yield (max_value, part_df)
+        last_value = max_value
 
 def _read_database_mssql(db_uri:str, query:str, order_by_column:str, last_id:Any, limit:int, partition:int) -> pl.DataFrame:   
 
@@ -125,29 +133,37 @@ def write_delta_merge(delta_table:str, db_uri:str, query:str,  order_by_column:s
 if __name__ == "__main__":
     logger.setLevel(logging.INFO) 
 
-    db_uri = "mssql://testoltp/Retail?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
+    db_uri = "mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
     delta_table = "./data/urun_recete"
 
-    read_database_partition(db_uri, "tb_UrunRecete", "ID" )
-    read_database_partition(db_uri, "tb_UrunRecete", "ID", ["ID", "UrunID1", "UrunID2", "Miktar", "SonDuzenleme", "VarsayilanAsorti"])
-    
-    initial_history_id = pl.read_database_uri("SELECT max(Hist_ID) as initial_history_id FROM tb_UrunRecete_Hist", db_uri)["initial_history_id"].item()
+    initial_history_id = None
+    last_value = None
+
     if os.path.exists(delta_table):
-       initial_history_id = pl.read_delta(delta_table)["Hist_ID"].max()
+        df = pl.read_delta(delta_table)
+        initial_history_id = df["Hist_ID"].max()
+        last_value = df["ID"].max()
+   
+    if not initial_history_id:
+        initial_history_id = pl.read_database_uri("SELECT max(Hist_ID) as initial_history_id FROM tb_Urun_Hist", db_uri)["initial_history_id"].item()
 
-    logger.info(f"Initial history id: {initial_history_id}")
+    if not initial_history_id:
+        initial_history_id = 0
 
-    write_delta(
-        delta_table, 
-        db_uri, 
-        f"""SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID={initial_history_id}, Hist_Islem=1 
-           FROM tb_UrunRecete""", 
-        "ID")
+    for max_value, df in read_database_partition(db_uri, "tb_Urun", "ID", last_value=last_value):
+        df = df.with_columns(
+          pl.lit(initial_history_id).cast(pl.Int64).alias("Hist_ID"),
+          pl.lit(1).cast(pl.Int16).alias("Hist_Islem"))
+        df.write_delta(delta_table, mode="append")
+        print(f"Max value: {max_value}, Height: {df.height}")
+        print(df.head())
 
-    write_delta_merge(
-        delta_table, 
-        db_uri, 
-        f"""SELECT ID, UrunID1, UrunID2, Miktar, SonDuzenleme, VarsayilanAsorti, Hist_ID, Hist_Islem 
-           FROM tb_UrunRecete_Hist WHERE Hist_ID > {initial_history_id}""", 
-        "Hist_ID", 
-        "ID")
+    for max_value, df in read_database_partition(db_uri, "tb_Urun_Hist", "Hist_ID", last_value=initial_history_id):
+         df.write_delta(
+            target=delta_table, 
+            mode="merge",
+            delta_merge_options={
+                "predicate": f"s.ID = t.ID",  
+                "source_alias": "s",         
+                "target_alias": "t",   
+            }).when_matched_update_all().when_not_matched_insert_all().execute()
