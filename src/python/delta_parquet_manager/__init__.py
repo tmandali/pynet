@@ -134,31 +134,30 @@ if __name__ == "__main__":
     logger.setLevel(logging.INFO) 
 
     db_uri = "mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
-    delta_table = "./data/urun_recete"
+    delta_table = "./data/urun"
 
-    initial_history_id = None
+    hist_id = None
     last_value = None
 
     if os.path.exists(delta_table):
         df = pl.read_delta(delta_table)
-        initial_history_id = df["Hist_ID"].max()
+        hist_id = df["Hist_ID"].max()
         last_value = df["ID"].max()
    
-    if not initial_history_id:
-        initial_history_id = pl.read_database_uri("SELECT max(Hist_ID) as initial_history_id FROM tb_Urun_Hist", db_uri)["initial_history_id"].item()
+    if not hist_id:
+        hist_id = pl.read_database_uri("SELECT max(Hist_ID) as current_history_id FROM tb_Urun_Hist", db_uri)["current_history_id"].item()
 
-    if not initial_history_id:
-        initial_history_id = 0
+    if not hist_id:
+        hist_id = 0
 
-    for max_value, df in read_database_partition(db_uri, "tb_Urun", "ID", last_value=last_value):
+    for max_value, df in read_database_partition(db_uri, "tb_Urun", "ID", last_value=last_value, limit=1_000_000):
         df = df.with_columns(
-          pl.lit(initial_history_id).cast(pl.Int64).alias("Hist_ID"),
+          pl.lit(hist_id).cast(pl.Int64).alias("Hist_ID"),
           pl.lit(1).cast(pl.Int16).alias("Hist_Islem"))
         df.write_delta(delta_table, mode="append")
-        print(f"Max value: {max_value}, Height: {df.height}")
-        print(df.head())
+        print(f"Init Max value: {max_value}, Height: {df.height}")
 
-    for max_value, df in read_database_partition(db_uri, "tb_Urun_Hist", "Hist_ID", last_value=initial_history_id):
+    for max_value, df in read_database_partition(db_uri, "tb_Urun_Hist", "Hist_ID", last_value=hist_id,limit=1_000_000):
          df.write_delta(
             target=delta_table, 
             mode="merge",
@@ -167,3 +166,4 @@ if __name__ == "__main__":
                 "source_alias": "s",         
                 "target_alias": "t",   
             }).when_matched_update_all().when_not_matched_insert_all().execute()
+         print(f"Hist Max value: {max_value}, Height: {df.height}")
