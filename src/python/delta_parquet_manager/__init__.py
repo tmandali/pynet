@@ -160,16 +160,23 @@ if __name__ == "__main__":
     logger.info(f"Init completed")
 
     for max_value, df in read_database_partition(db_uri, "tb_Urun_Hist", "Hist_ID", last_value=hist_id, limit=100_000):
-        df.write_delta(
-            target=delta_table, 
-            mode="merge",
-            delta_merge_options={
-                "predicate": f"s.ID = t.ID",  
-                "source_alias": "s",         
-                "target_alias": "t",   
-            }).when_matched_update_all().when_not_matched_insert_all().execute()
-        
-        print(f"Hist Max value: {max_value}, Height: {df.height}")
+        # df.write_delta(
+        #     target=delta_table, 
+        #     mode="merge",
+        #     delta_merge_options={
+        #         "predicate": f"s.ID = t.ID",  
+        #         "source_alias": "s",         
+        #         "target_alias": "t",   
+        #     }).when_matched_update_all().when_not_matched_insert_all().execute()
+
+        df.write_delta(target=delta_table, mode="append")
+        df = df.sort("Hist_ID").unique(subset=["ID"], keep="last")
+        logger.info(f"Writing delta table: {delta_table} with height: {df.height}")
         del df
+    
+    delta_df = pl.read_delta(delta_table)
+    delta_df = delta_df.sort("Hist_ID").unique(subset=["ID"], keep="last")
+    delta_df.write_delta(delta_table, mode="overwrite")
+    del delta_df
 
     logger.info(f"Hist completed")
