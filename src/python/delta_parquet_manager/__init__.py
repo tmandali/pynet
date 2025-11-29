@@ -1,11 +1,12 @@
 import datetime
+import gc
 import logging
 import os
 import shutil
 from typing import Any, Iterable
 from urllib.parse import urlparse
 import polars as pl
-from pypika import MSSQLQuery, Order, Table
+from pypika import Field, MSSQLQuery, Order, Table
 from pypika.analytics import Max, Min
 from pypika.queries import QueryBuilder
 
@@ -18,34 +19,35 @@ if not logger.handlers:
 
 
 def read_database_partition(db_uri:str, table_name:str, partition_on:str, columns:str|list[str]='*', last_value:Any=None, limit:int = 100_000, partition_num:int = 8) -> Iterable[tuple[Any, pl.DataFrame]]:
-
-    table = Table(table_name)
-    table_query = MSSQLQuery.from_(table).select(table[partition_on]).orderby(table[partition_on], order=Order.asc).limit(limit)
-
     while True:
+        table = Table(table_name)
+        table_query = MSSQLQuery.from_(table).select(Field(partition_on))
         if last_value is not None:
-            table_query = table_query.where(table[partition_on] > last_value)
+            table_query = table_query.where(Field(partition_on).gt(last_value))
+        table_query = table_query.orderby(1).limit(limit).get_sql()
+        
+        range_query = f"""           
+            WITH Part AS ({table_query}),
+            Range AS (SELECT NTILE({partition_num}) OVER (ORDER BY {partition_on}) as Part, {partition_on} FROM Part)
+            SELECT Part, MIN({partition_on}) as BeginPart, MAX({partition_on}) as EndPart FROM Range GROUP BY Part
+        """
+        range_df = pl.read_database_uri(range_query, db_uri).iter_rows(named=True)
+        part_query_list: list[str] = []
+        last_value = None
+        for range in range_df:
+            part_query = MSSQLQuery.from_(table)\
+                .select(*(columns if isinstance(columns, str) else columns))\
+                .where(Field(partition_on)\
+                .between(range['BeginPart'], range['EndPart'])).get_sql()
+            part_query_list.append(part_query)
+            last_value = range['EndPart']
 
-        range_query = MSSQLQuery.from_(table_query).select(
-            Max(table_query[partition_on]).as_('max_value'), 
-            Min(table_query[partition_on]).as_('min_value'))
-            
-        range_sql = range_query.get_sql()
-        range_df = pl.read_database_uri(range_sql, db_uri)
-    
-        min_value = range_df["min_value"].item()
-        max_value = range_df["max_value"].item()
-
-        part_query = MSSQLQuery.from_(table).select(*(columns if isinstance(columns, str) else columns)).where(table[partition_on] >= min_value).where(table[partition_on] <= max_value)
-        part_sql = part_query.get_sql()
-        part_df = pl.read_database_uri(part_sql, db_uri, partition_num=partition_num, partition_on=partition_on)
-
-        if part_df is None or part_df.is_empty():
+        if len(part_query_list) == 0:
             break
 
-        yield (max_value, part_df)
-        last_value = max_value
-
+        part_df = pl.read_database_uri(part_query_list, db_uri)
+        yield (last_value, part_df)  
+        
 def _read_database_mssql(db_uri:str, query:str, order_by_column:str, last_id:Any, limit:int, partition:int) -> pl.DataFrame:   
 
     resume = ""
@@ -150,15 +152,20 @@ if __name__ == "__main__":
     if not hist_id:
         hist_id = 0
 
-    for max_value, df in read_database_partition(db_uri, "tb_Urun", "ID", last_value=last_value, limit=1_000_000):
+    logger.info(f"Sync started")
+
+    for max_value, df in read_database_partition(db_uri, "tb_Urun", "ID", last_value=last_value, limit=10_000_000):
         df = df.with_columns(
           pl.lit(hist_id).cast(pl.Int64).alias("Hist_ID"),
           pl.lit(1).cast(pl.Int16).alias("Hist_Islem"))
         df.write_delta(delta_table, mode="append")
+        del df
         print(f"Init Max value: {max_value}, Height: {df.height}")
 
-    for max_value, df in read_database_partition(db_uri, "tb_Urun_Hist", "Hist_ID", last_value=hist_id,limit=1_000_000):
-         df.write_delta(
+    logger.info(f"Init completed")
+
+    for max_value, df in read_database_partition(db_uri, "tb_Urun_Hist", "Hist_ID", last_value=hist_id, limit=100_000):
+        df.write_delta(
             target=delta_table, 
             mode="merge",
             delta_merge_options={
@@ -166,4 +173,8 @@ if __name__ == "__main__":
                 "source_alias": "s",         
                 "target_alias": "t",   
             }).when_matched_update_all().when_not_matched_insert_all().execute()
-         print(f"Hist Max value: {max_value}, Height: {df.height}")
+        
+        print(f"Hist Max value: {max_value}, Height: {df.height}")
+        del df
+
+    logger.info(f"Hist completed")
