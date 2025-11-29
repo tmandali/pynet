@@ -1,14 +1,9 @@
-import datetime
-import gc
 import logging
 import os
-import shutil
 from typing import Any, Iterable
 from urllib.parse import urlparse
 import polars as pl
-from pypika import Field, MSSQLQuery, Order, Table
-from pypika.analytics import Max, Min
-from pypika.queries import QueryBuilder
+from pypika import Field, MSSQLQuery, Table
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -159,9 +154,9 @@ if __name__ == "__main__":
           pl.lit(hist_id).cast(pl.Int64).alias("Hist_ID"),
           pl.lit(1).cast(pl.Int16).alias("Hist_Islem"))
         df.write_delta(delta_table, mode="append")
-        del df
         print(f"Init Max value: {max_value}, Height: {df.height}")
-
+        del df
+        
     logger.info(f"Init completed")
 
     for max_value, df in read_database_partition(db_uri, "tb_Urun_Hist", "Hist_ID", last_value=hist_id, limit=100_000):
