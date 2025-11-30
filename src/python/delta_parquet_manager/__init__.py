@@ -131,15 +131,15 @@ if __name__ == "__main__":
     logger.setLevel(logging.INFO) 
 
     db_uri = "mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
-    delta_table = "./data/urun"
+    folder_path = "./data/urun"
 
     hist_id = None
     last_value = None
 
-    if os.path.exists(delta_table):
-        df = pl.read_delta(delta_table)
-        hist_id = df["Hist_ID"].max()
-        last_value = df["ID"].max()
+    if os.path.exists(folder_path):
+        df = pl.scan_parquet(folder_path)
+        hist_id = df.select(pl.col("Hist_ID").max()).collect()["Hist_ID"].item()
+        last_value = df.select(pl.col("ID").max()).collect()["ID"].item()
    
     if not hist_id:
         hist_id = pl.read_database_uri("SELECT max(Hist_ID) as current_history_id FROM tb_Urun_Hist", db_uri)["current_history_id"].item()
@@ -151,15 +151,53 @@ if __name__ == "__main__":
 
     for max_value, df in read_database_partition(db_uri, "tb_Urun", "ID", last_value=last_value, limit=10_000_000):
         df = df.with_columns(
-          pl.lit(hist_id).cast(pl.Int64).alias("Hist_ID"),
-          pl.lit(1).cast(pl.Int16).alias("Hist_Islem"))
-        df.write_delta(delta_table, mode="append")
-        print(f"Init Max value: {max_value}, Height: {df.height}")
-        del df
+            (pl.col("ID") // 1_000_000).alias("bucket_id"),
+            pl.lit(hist_id).cast(pl.Int64).alias("Hist_ID"),
+            pl.lit(1).cast(pl.Int16).alias("Hist_Islem")
+        )
+        partitions = df.partition_by("bucket_id", as_dict=True)
+    
+        for bucket_val, df_updates in partitions.items():
+            file_name = f"part_{bucket_val}.parquet"
+            file_path = os.path.join(folder_path, file_name)
+
+            df_updates = df_updates.drop("bucket_id")
+
+            if os.path.exists(file_path):
+                df_current = pl.read_parquet(file_path)
+                df_updates = pl.concat([df_current, df_updates])
+                df_updates = df_updates.unique(subset=["ID"], keep="last", maintain_order=False)
+                
+            df_updates.write_delta(delta_table)
+
+        # df = df.with_columns(
+        #   pl.lit(hist_id).cast(pl.Int64).alias("Hist_ID"),
+        #   pl.lit(1).cast(pl.Int16).alias("Hist_Islem"))
+        # df.write_delta(delta_table, mode="append")
+        # print(f"Init Max value: {max_value}, Height: {df.height}")
+        # del df
         
     logger.info(f"Init completed")
 
     for max_value, df in read_database_partition(db_uri, "tb_Urun_Hist", "Hist_ID", last_value=hist_id, limit=100_000):
+        df = df.with_columns(
+            (pl.col("ID") // 1_000_000).alias("bucket_id"),
+        )
+        partitions = df.partition_by("bucket_id", as_dict=True)
+    
+        for bucket_val, df_updates in partitions.items():
+            file_name = f"part_{bucket_val}.parquet"
+            file_path = os.path.join(folder_path, file_name)
+
+            df_updates = df_updates.drop("bucket_id")
+
+            if os.path.exists(file_path):
+                df_current = pl.read_parquet(file_path)
+                df_updates = pl.concat([df_current, df_updates])
+                df_updates = df_updates.sort("Hist_ID").unique(subset=["ID"], keep="last", maintain_order=False)
+                
+            df_updates.write_delta(delta_table)
+
         # df.write_delta(
         #     target=delta_table, 
         #     mode="merge",
@@ -169,14 +207,14 @@ if __name__ == "__main__":
         #         "target_alias": "t",   
         #     }).when_matched_update_all().when_not_matched_insert_all().execute()
 
-        df.write_delta(target=delta_table, mode="append")
-        df = df.sort("Hist_ID").unique(subset=["ID"], keep="last")
-        logger.info(f"Writing delta table: {delta_table} with height: {df.height}")
-        del df
+    #     df.write_delta(target=delta_table, mode="append")
+    #     df = df.sort("Hist_ID").unique(subset=["ID"], keep="last")
+    #     logger.info(f"Writing delta table: {delta_table} with height: {df.height}")
+    #     del df
     
-    delta_df = pl.read_delta(delta_table)
-    delta_df = delta_df.sort("Hist_ID").unique(subset=["ID"], keep="last")
-    delta_df.write_delta(delta_table, mode="overwrite")
-    del delta_df
+    # delta_df = pl.read_delta(delta_table)
+    # delta_df = delta_df.sort("Hist_ID").unique(subset=["ID"], keep="last")
+    # delta_df.write_delta(delta_table, mode="overwrite")
+    # del delta_df
 
     logger.info(f"Hist completed")
