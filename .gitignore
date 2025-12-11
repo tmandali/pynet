@@ -186,3 +186,4 @@ node_modules/
 
 # DynamoDB Local files
 .dynamodb/
+src/python/*.parquet.backup

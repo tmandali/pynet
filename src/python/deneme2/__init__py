@@ -1,0 +1,176 @@
+
+from glob import glob
+import io
+import os
+import time
+import uuid
+from deltalake import DeltaTable, write_deltalake
+from pypika import Field, MSSQLQuery, Table
+import connectorx as cx
+import polars as pl
+import pyarrow.parquet as pq
+import pyarrow.compute as pc
+import pyarrow.dataset as ds
+import datafusion 
+
+if __name__ == "__main__":    
+    hist_id = None
+    table_name = "tb_Urun"
+    colums = ['ID','UrunID','UrunKod','Renk','Beden','Boy','Tarih','Line','NumuneVaryantSira','SergiEkipmanRef','SizeRef','UrunOptionRef','UrunOptionSizeRef','UrunOptionAsortiRef','BedenBoyRef','Konsinye','AxaAktarilsinmi','UrunSKULevelRef','LcwArticleCode','Agirlik','UrunKoliIcerikTipref']
+    partition_num = 8
+    chunk_size = 1_000_000
+    db_uri = "mssql://temaoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
+
+
+    reader = cx.read_sql(db_uri, "select top 1000000 * from tb_Urun (nolock)", return_type="arrow_stream")
+    lf = pl.LazyFrame(reader).limit(100_000)
+
+    with pq.ParquetWriter("delta_files/urun.parquet", schema=reader.schema) as writer:
+        for batch in reader:
+            writer.write(batch, row_group_size=100_000)
+
+
+
+    change_writer = None
+    if  glob("delta_files/urun/urun_*.parquet"):
+        hist_id = pl.scan_parquet("delta_files/urun/urun_*.parquet").unique(subset=["ID"], keep="last").max().select('Hist_ID').collect().item()
+    
+    while  DeltaTable.is_deltatable("delta_files/urun"):
+        
+        if hist_id is None:
+            hist_id = pl.read_delta("delta_files/urun", columns=["Hist_ID"]).max().item()
+
+        hist_id = 0
+        
+        table = Table(table_name + '_Hist')
+        table_query = MSSQLQuery.from_(table).select(Field("Hist_ID"))
+        if hist_id is not None:
+            table_query = table_query.where(Field("Hist_ID").gt(hist_id))
+        table_query = table_query.orderby(1).limit(chunk_size).get_sql()
+
+        range_query = f"""           
+            WITH Part AS ({table_query}),
+            Range AS (SELECT NTILE({partition_num}) OVER (ORDER BY Hist_ID) as Part, Hist_ID FROM Part)
+            SELECT MIN(Hist_ID) as BeginPart, MAX(Hist_ID) as EndPart FROM Range GROUP BY Part
+        """
+
+        query_list = []
+        for part in cx.read_sql(db_uri, range_query).itertuples():
+            query = MSSQLQuery.from_(table).select('*')
+            # query = query.select(table.Hist_ID, table.Hist_Islem, (table.ID / chunk_size).as_("part_id"))
+            query = query.where(Field('Hist_ID').between(part.BeginPart, part.EndPart))
+            query = query.get_sql()
+            query_list.append(query)
+
+        if len(query_list) == 0:
+            break
+
+        change_table = cx.read_sql(
+            db_uri, 
+            query_list,  
+            return_type="arrow_stream")  #.sort("Hist_ID").unique(subset=["ID"], keep="last")
+
+        # lf = ctx.from_arrow(change_table)
+        # lf = lf.write_parquet("delta_files/urun/urun_change.parquet")
+        
+        lf = pl.DataFrame(change_table)
+        lf = lf.sql(f"select *, (ID/{chunk_size}) as 'part_id' from self")
+        #lf = pl.union([lf, pl.scan_parquet("delta_files/urun_change/").filter(pl.col("Part_ID") == 4)])
+        lf = lf.sort("Hist_ID").unique(subset=["ID"], keep="last")
+        #lf.sink_parquet("delta_files/urun/urun.parquet", compression="zstd", use_pyarrow=True, pyarrow_options={"row_group_size": 100_000})
+        # lf.sink_parquet(
+        #     pl.PartitionByKey("./delta_files/urun_change/", by="Part_ID"),
+        #     mkdir=True
+        # )
+       
+        partitions = lf.partition_by("part_id", as_dict=True)
+        for part_id, df_updates in partitions.items():
+            dt = DeltaTable("./delta_files/urun")
+            (
+                dt.merge(
+                    source=df_updates.to_arrow(),
+                    predicate=f"t.ID = s.ID AND t.part_id = {part_id[0]}",
+                    source_alias="s",
+                    target_alias="t")
+                .when_matched_delete(predicate="s.Hist_Islem = 0")
+                .when_matched_update_all(predicate="s.Hist_Islem > 0")
+                .when_not_matched_insert_all(predicate="s.Hist_Islem > 0")
+                .execute()
+            )
+        
+        
+
+        hist_id = pc.max(lf['Hist_ID'])
+        
+        # start_time = time.time()
+        # merger = DeltaTable("delta_files/urun").merge(source=df_change.to_arrow(), 
+        #     predicate=f"target.ID = source.ID AND target.part_id = source.part_id",
+        #     source_alias="source",
+        #     target_alias="target"
+        # ).when_matched_update_all().when_not_matched_insert_all().execute()
+        # print(f"merge time: {time.time() - start_time:.2f} seconds")
+
+    if change_writer is not None:
+        change_writer.close()
+        # df = pl.scan_parquet("delta_files/urun/urun_*.parquet").unique(subset=["ID"], keep="last")  
+        # df.sink_parquet(change_file)
+        # change_file.close()
+
+    last_id = None
+    delta_table = None
+
+    while True:
+        if  DeltaTable.is_deltatable("delta_files/urun"):
+            break
+
+        if  DeltaTable.is_deltatable("delta_files/urun.init"):
+            last_id = pl.read_delta("delta_files/urun.init", columns=["ID"]).max().item()
+            hist_id = pl.read_delta("delta_files/urun.init", columns=["Hist_ID"]).max().item()
+ 
+        if hist_id is None:
+            for part in cx.read_sql(db_uri, "select max(Hist_ID) as Hist_ID from tb_Urun_Hist").itertuples():
+                hist_id = part.Hist_ID
+
+        table = Table(table_name)
+        table_query = MSSQLQuery.from_(table).select(Field("ID"))
+        if last_id is not None:
+            table_query = table_query.where(Field("ID").gt(last_id))
+        table_query = table_query.orderby(1).limit(chunk_size).get_sql()
+
+        range_query = f"""           
+            WITH Part AS ({table_query}),
+            Range AS (SELECT NTILE({partition_num}) OVER (ORDER BY ID) as Part, ID FROM Part)
+            SELECT MIN(ID) as BeginPart, MAX(ID) as EndPart FROM Range GROUP BY Part
+        """
+
+        query_list = []
+        for part in cx.read_sql(db_uri, range_query).itertuples():
+            query = MSSQLQuery.from_(table).select(*colums)
+            query = query.select(Field('Hist_ID').eq(hist_id), Field('Hist_Islem').eq(1), (table.ID / chunk_size).as_("part_id"))
+            query = query.where(Field('ID').between(part.BeginPart, part.EndPart))
+            query = query.get_sql()
+            query_list.append(query)
+
+        if len(query_list) == 0:
+            break
+        
+        reader = cx.read_sql(
+            db_uri, 
+            query_list,  
+            return_type="arrow_stream")
+        
+        if delta_table is None:
+            delta_table = DeltaTable.create("delta_files/urun.init", schema=reader.schema, partition_by=["part_id"])
+    
+        start_time = time.time()
+        write_deltalake(delta_table, reader, mode="append")
+        print(f"append time: {time.time() - start_time:.2f} seconds")
+    
+    if not DeltaTable.is_deltatable("delta_files/urun"):
+        os.rename("delta_files/urun.init", "delta_files/urun")
+    
+    print("done")
+
+dtx = DeltaTable("delta_files/urun")
+dtx.optimize.compact()
+#dtx.vacuum(retention_hours=168, dry_run=False)

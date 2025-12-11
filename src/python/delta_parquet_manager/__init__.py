@@ -2,8 +2,12 @@ import logging
 import os
 from typing import Any, Iterable
 from urllib.parse import urlparse
+import uuid
 import polars as pl
 from pypika import Field, MSSQLQuery, Table
+import connectorx as cx
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -130,73 +134,261 @@ def write_delta_merge(delta_table:str, db_uri:str, query:str,  order_by_column:s
 if __name__ == "__main__":
     logger.setLevel(logging.INFO) 
 
-    db_uri = "mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
-    folder_path = "./data/urun"
+    # from pyarrow import fs
+    # localfs = fs.LocalFileSystem()
+    # partitioned_dir_content = localfs.get_file_info(fs.FileSelector("./partitioned", recursive=True))
+    # files = sorted((f.path for f in partitioned_dir_content if f.type == fs.FileType.File))
 
-    hist_id = None
+    # for file in files:
+    #     print(file)
+
+    # s3 = fs.SubTreeFileSystem(
+    # "ursa-labs-taxi-data",
+    # fs.S3FileSystem(region="us-east-2", anonymous=True))
+
+    # for entry in s3.get_file_info(fs.FileSelector("2011", recursive=True)):
+    #     if entry.type == fs.FileType.File:
+    #         print(entry.path)
+
+    db_uri = "mssql://temaoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true"
+    folder_path = os.path.normpath("./data/urun")
+
+    # import pyodbc
+    # import pandas as pd
+
+    # from adbc_driver_postgresql import dbapi  
+    # with dbapi.connect('mssql://testoltp/Store7?driver=ODBC+Driver+17+for+SQL+Server&TrustServerCertificate=yes&trusted_connection=true') as conn:  # doctest:+SKIP
+    #    df = pd.read_sql('SELECT * FROM tb_Urun WHERE ID >= 30000000 AND ID <= 31000000', conn)
+
+    # connection_string = (
+    #     'DRIVER={ODBC Driver 17 for SQL Server};'
+    #     'SERVER=TEMAOLTP;'  # Örneğin: 'localhost', 'SUNUCU_ADI\ORNEK_INST'
+    #     'DATABASE=Store7;'
+    #     'Trusted_Connection=yes;'
+    # )
+    # conn = pyodbc.connect(connection_string)
+    # df = pd.read_sql("SELECT * FROM tb_Urun WHERE ID >= 30000000 AND ID <= 31000000", conn)
+    # print(df.describe())
+    # print(len(df))
+
+
+    # from pyarrow import fs
+    # localfs = fs.LocalFileSystem()
+    # partitioned_dir_content = localfs.get_file_info(fs.FileSelector("./data/urun", recursive=True))
+    # files = sorted((f.path for f in partitioned_dir_content if f.type == fs.FileType.File))
+
+    # for file in files:
+    #     print(file)
+
+    import tempfile
+    import duckdb
+
+    chunk_size = 10_000_000    
+    range = 0
     last_value = None
+    table_name = "tb_Urun"
+    partition_num = 8
+    partition_on = "ID"
+    colums = ['ID','UrunID','UrunKod','Renk','Beden','Boy','Tarih','Line','NumuneVaryantSira','SergiEkipmanRef','SizeRef','UrunOptionRef','UrunOptionSizeRef','UrunOptionAsortiRef','BedenBoyRef','Konsinye','AxaAktarilsinmi','UrunSKULevelRef','LcwArticleCode','Agirlik','UrunKoliIcerikTipref','Hist_ID','Hist_Islem']
 
-    if os.path.exists(folder_path):
-        df = pl.scan_parquet(folder_path)
-        hist_id = df.select(pl.col("Hist_ID").max()).collect()["Hist_ID"].item()
-        last_value = df.select(pl.col("ID").max()).collect()["ID"].item()
-   
-    if not hist_id:
-        hist_id = pl.read_database_uri("SELECT max(Hist_ID) as current_history_id FROM tb_Urun_Hist", db_uri)["current_history_id"].item()
+    with duckdb.connect("datadb.db") as con:
+        con.sql("ATTACH 'ducklake:metadata.ducklake' AS data (DATA_PATH 'data_files')")
+        con.sql("USE data")
+        #duck_con.execute(f"drop table if exists {table_name}")
 
-    if not hist_id:
-        hist_id = 0
+        while True:
+            if (os.path.exists(f"data_files/main/{table_name}")):    
+                result = con.sql(f"SELECT max(Hist_ID) FROM {table_name}").fetchone()
+                hist_id = result[0]
 
-    logger.info(f"Sync started")
+            table = Table(table_name + "_Hist")
+            table_query = MSSQLQuery.from_(table).select(Field("Hist_ID"))
+            if hist_id is not None:
+                table_query = table_query.where(Field("Hist_ID").gt(hist_id))
+            table_query = table_query.orderby(1).limit(chunk_size).get_sql()            
 
-    for max_value, df in read_database_partition(db_uri, "tb_Urun", "ID", last_value=last_value, limit=10_000_000):
-        df = df.with_columns(
-            (pl.col("ID") // 1_000_000).alias("bucket_id"),
-            pl.lit(hist_id).cast(pl.Int64).alias("Hist_ID"),
-            pl.lit(1).cast(pl.Int16).alias("Hist_Islem")
-        )
-        partitions = df.partition_by("bucket_id", as_dict=True)
-    
-        for bucket_val, df_updates in partitions.items():
-            file_name = f"part_{bucket_val}.parquet"
-            file_path = os.path.join(folder_path, file_name)
+            range_query = f"""           
+                WITH Part AS ({table_query}),
+                Range AS (SELECT NTILE({partition_num}) OVER (ORDER BY Hist_ID) as Part, Hist_ID FROM Part)
+                SELECT Part, MIN(Hist_ID) as BeginPart, MAX(Hist_ID) as EndPart FROM Range GROUP BY Part
+            """
 
-            df_updates = df_updates.drop("bucket_id")
+            range_list =  pl.read_database_uri(range_query, db_uri).to_dicts()  
+            query_list = []
+            for range_dict in range_list:  
+                query_list.append(
+                    MSSQLQuery.from_(table)
+                        .select(*colums)
+                        .where(Field('Hist_ID').between(range_dict["BeginPart"], range_dict["EndPart"]))
+                        .get_sql())
 
-            if os.path.exists(file_path):
-                df_current = pl.read_parquet(file_path)
-                df_updates = pl.concat([df_current, df_updates])
-                df_updates = df_updates.unique(subset=["ID"], keep="last", maintain_order=False)
+            if len(query_list) == 0:
+                break
+            
+            # reader: pa.ipc.RecordBatchStreamReader = cx.read_sql(
+            #     db_uri, 
+            #     query_list,  
+            #     return_type="arrow_stream")
+
+            df = cx.read_sql(
+                db_uri, 
+                query_list,  
+                return_type="polars").sort("Hist_ID").unique(subset=["ID"], keep="last")
+            
+            merge_sql = f"""
+                MERGE INTO {table_name}
+                USING (
+                    SELECT * FROM df
+                ) AS upserts
+                ON (upserts.{partition_on} = {table_name}.{partition_on})
+                WHEN MATCHED THEN UPDATE
+                WHEN NOT MATCHED THEN INSERT;
+            """
+
+            con.sql(merge_sql)
+            con.sql(f"DELETE FROM {table_name} WHERE Hist_Islem=0")
+            break
+
+        while True:    
+            if (os.path.exists(f"data_files/main/{table_name}")):    
+                result = con.sql(f"SELECT max(ID) FROM {table_name}").fetchone()
+                last_value = result[0]
                 
-            df_updates.write_delta(delta_table)
-
-        # df = df.with_columns(
-        #   pl.lit(hist_id).cast(pl.Int64).alias("Hist_ID"),
-        #   pl.lit(1).cast(pl.Int16).alias("Hist_Islem"))
-        # df.write_delta(delta_table, mode="append")
-        # print(f"Init Max value: {max_value}, Height: {df.height}")
-        # del df
+            table = Table(table_name)
+            table_query = MSSQLQuery.from_(table).select(Field("ID"))
+            if last_value is not None:
+                table_query = table_query.where(Field("ID").gt(last_value))
+            table_query = table_query.orderby(1).limit(chunk_size).get_sql()
         
-    logger.info(f"Init completed")
+            range_query = f"""           
+                WITH Part AS ({table_query}),
+                Range AS (SELECT NTILE({partition_num}) OVER (ORDER BY {partition_on}) as Part, {partition_on} FROM Part)
+                SELECT Part, MIN({partition_on}) as BeginPart, MAX({partition_on}) as EndPart FROM Range GROUP BY Part
+            """
 
-    for max_value, df in read_database_partition(db_uri, "tb_Urun_Hist", "Hist_ID", last_value=hist_id, limit=100_000):
-        df = df.with_columns(
-            (pl.col("ID") // 1_000_000).alias("bucket_id"),
-        )
-        partitions = df.partition_by("bucket_id", as_dict=True)
+            range_list =  pl.read_database_uri(range_query, db_uri).to_dicts()  
+            query_list = []
+            for range_dict in range_list:  
+                query_list.append(
+                    MSSQLQuery.from_(table)
+                        .select(*colums)
+                        .select(Field('Hist_ID').eq(603763973))
+                        .select(Field('Hist_Islem').eq(1))
+                        .where(Field(partition_on).between(range_dict["BeginPart"], range_dict["EndPart"]))
+                        .get_sql())
+
+            if len(query_list) == 0:
+                break
+
+            reader: pa.ipc.RecordBatchStreamReader = cx.read_sql(
+                db_uri, 
+                query_list,  
+                return_type="arrow_stream")
+            
+            if last_value is None:
+                con.sql(f"CREATE TABLE {table_name} AS SELECT * FROM reader")
+                #con.sql(f"ALTER TABLE {table_name} ADD COLUMN Hist_ID INTEGER DEFAULT 0")
+                #con.sql(f"ALTER TABLE {table_name} ADD COLUMN Hist_Islem INTEGER DEFAULT 1")
+            else:
+                con.sql(f"INSERT INTO {table_name} SELECT * FROM reader")           
+
+exit()
+        
+    #     reader: pa.ipc.RecordBatchStreamReader = cx.read_sql(
+    #         db_uri, 
+    #         f"SELECT * FROM tb_Urun",  
+    #         return_type="arrow_stream", 
+    #         partition_on="ID", 
+    #         partition_range=[range + 1, range + chunk_size], 
+    #         partition_num=8,
+    #         )    
+        
+    #     # with pa.ipc.new_file(sink, batch.schema) as writer:
+    #     file_name = uuid.uuid4()
+    #     with pq.ParquetWriter(f"data//urun/{file_name}.tmp", schema=reader.schema) as writer:
+    #         rows = 0
+    #         #while (batch := reader.read_next_batch()):
+    #         for i ,batch in enumerate(reader):                        
+    #             rows += batch.num_rows
+    #             print(f"Rows: {rows}", end='\r')
+    #             writer.write_batch(batch)
+            
+    #         writer.close()
+    #         if rows == 0:   
+    #             os.remove(f"data//urun/{file_name}.tmp")
+    #             break
+        
+    #     os.replace(f"data//urun/{file_name}.tmp", f"data//urun/{file_name}.parquet")
+    #     range += chunk_size            
+
+    #         # for i ,batch in enumerate(reader):                        
+    #         #     writer.write_batch(batch)               
+    #         #     logger.info(f"Batch {i}: Max ID: {pc.max(batch["ID"]).as_py()} Rows: {batch.num_rows}")        
+    # exit()
+    # hist_id = None
+    # last_value = None
+
+    # if os.path.exists(folder_path):
+    #     df = pl.scan_parquet(folder_path)
+    #     hist_id = df.select(pl.col("Hist_ID").max()).collect()["Hist_ID"].item()
+    #     last_value = df.select(pl.col("ID").max()).collect()["ID"].item()
+   
+    # if not hist_id:
+    #     hist_id = pl.read_database_uri("SELECT max(Hist_ID) as current_history_id FROM tb_Urun_Hist", db_uri)["current_history_id"].item()
+
+    # if not hist_id:
+    #     hist_id = 0
+
+    # logger.info(f"Sync started")
+
+    # for max_value, df in read_database_partition(db_uri, "tb_Urun", "ID", last_value=last_value, limit=2_000_000):
+    #     df = df.with_columns(
+    #         (pl.col("ID") // 1_000_000).alias("bucket_id"),
+    #         pl.lit(hist_id).cast(pl.Int64).alias("Hist_ID"),
+    #         pl.lit(1).cast(pl.Int16).alias("Hist_Islem")
+    #     )
+    #     partitions = df.partition_by("bucket_id", as_dict=True)
     
-        for bucket_val, df_updates in partitions.items():
-            file_name = f"part_{bucket_val}.parquet"
-            file_path = os.path.join(folder_path, file_name)
+    #     for bucket_val, df_updates in partitions.items():
+    #         file_name = f"part_{bucket_val[0]}.parquet"
+    #         file_path = os.path.normpath(os.path.join(folder_path, file_name))
 
-            df_updates = df_updates.drop("bucket_id")
+    #         df_updates = df_updates.drop("bucket_id")
 
-            if os.path.exists(file_path):
-                df_current = pl.read_parquet(file_path)
-                df_updates = pl.concat([df_current, df_updates])
-                df_updates = df_updates.sort("Hist_ID").unique(subset=["ID"], keep="last", maintain_order=False)
-                
-            df_updates.write_delta(delta_table)
+    #         if os.path.exists(file_path):
+    #             df_current = pl.read_parquet(file_path)
+    #             df_updates = pl.concat([df_current, df_updates])
+    #             df_updates = df_updates.unique(subset=["ID"], keep="last")
+         
+    #         df_updates.write_parquet(file_path, mkdir=True)
+
+    #     # df = df.with_columns(
+    #     #   pl.lit(hist_id).cast(pl.Int64).alias("Hist_ID"),
+    #     #   pl.lit(1).cast(pl.Int16).alias("Hist_Islem"))
+    #     # df.write_delta(delta_table, mode="append")
+    #     # print(f"Init Max value: {max_value}, Height: {df.height}")
+    #     # del df
+        
+    # logger.info(f"Init completed")
+
+    # for max_value, df in read_database_partition(db_uri, "tb_Urun_Hist", "Hist_ID", last_value=hist_id, limit=100_000):
+    #     df = df.with_columns(
+    #         (pl.col("ID") // 1_000_000).alias("bucket_id"),
+    #     )
+    #     partitions = df.partition_by("bucket_id", as_dict=True)
+    
+    #     for bucket_val, df_updates in partitions.items():
+    #         file_name = f"part_{bucket_val[0]}.parquet"
+    #         file_path = os.path.normpath(os.path.join(folder_path, file_name))
+
+    #         df_updates = df_updates.drop("bucket_id")
+
+    #         if os.path.exists(file_path):
+    #             df_current = pl.read_parquet(file_path)
+    #             df_updates = pl.concat([df_current, df_updates])
+    #             df_updates = df_updates.sort("Hist_ID").unique(subset=["ID"], keep="last")
+         
+    #         df_updates.write_parquet(file_path, mkdir=True)
 
         # df.write_delta(
         #     target=delta_table, 
@@ -217,4 +409,4 @@ if __name__ == "__main__":
     # delta_df.write_delta(delta_table, mode="overwrite")
     # del delta_df
 
-    logger.info(f"Hist completed")
+    # logger.info(f"Hist completed")
